@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Build artifacts - never commit, app/release/app-release.apk was 48.8MB
+/app/release/
+/.artifacts/
