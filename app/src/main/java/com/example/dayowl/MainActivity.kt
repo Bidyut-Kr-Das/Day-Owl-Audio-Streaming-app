@@ -13,7 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.navigation.compose.rememberNavController
 import com.example.dayowl.service.HostService
-import com.example.dayowl.ui.NavGraph
+import com.example.dayowl.ui.MainScaffold
 import com.example.dayowl.ui.theme.DayOwlTheme
 
 class MainActivity : ComponentActivity() {
@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             DayOwlTheme {
                 val navController = rememberNavController()
-                NavGraph(
+                MainScaffold(
                     navController = navController,
                     onRequestProjection = {
                         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) 

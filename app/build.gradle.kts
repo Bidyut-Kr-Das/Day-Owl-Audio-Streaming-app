@@ -34,6 +34,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        // FrameRing and AudioPacketizer are android-free, but AudioConfig still names
+        // AudioFormat; default-values keeps any residual stub from throwing.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {

@@ -1,27 +1,35 @@
 package com.example.dayowl.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.example.dayowl.ui.home.HomeScreen
+import com.example.dayowl.ui.home.HomeViewModel
 import com.example.dayowl.ui.host.HostScreen
 import com.example.dayowl.ui.join.JoinScreen
 import com.example.dayowl.ui.session.SessionScreen
 import com.example.dayowl.ui.debug.DebugScreen
 import com.example.dayowl.ui.settings.SettingsScreen
+import com.example.dayowl.ui.settings.SettingsViewModel
+import org.koin.androidx.compose.koinViewModel
 
 @Composable
 fun NavGraph(
     navController: NavHostController,
-    onRequestProjection: () -> Unit
+    onRequestProjection: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     NavHost(
         navController = navController,
-        startDestination = Screen.Home.route
+        startDestination = Screen.Home.route,
+        modifier = modifier
     ) {
         composable(Screen.Home.route) {
+            val viewModel: HomeViewModel = koinViewModel()
             HomeScreen(
+                viewModel = viewModel,
                 onNavigateToHost = { navController.navigate(Screen.Host.route) },
                 onNavigateToJoin = { navController.navigate(Screen.Join.route) },
                 onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
@@ -49,7 +57,11 @@ fun NavGraph(
             DebugScreen(onNavigateBack = { navController.popBackStack() })
         }
         composable(Screen.Settings.route) {
-            SettingsScreen(onNavigateBack = { navController.popBackStack() })
+            val viewModel: SettingsViewModel = koinViewModel()
+            SettingsScreen(
+                viewModel = viewModel,
+                onNavigateBack = { navController.popBackStack() }
+            )
         }
     }
 }

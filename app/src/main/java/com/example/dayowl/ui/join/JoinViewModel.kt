@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import com.example.dayowl.model.SessionInfo
 import com.example.dayowl.network.DiscoveryManager
 import com.example.dayowl.network.SessionManager
+import com.example.dayowl.repository.ConnectionState
 import com.example.dayowl.repository.SessionRepository
 import com.example.dayowl.service.ClientService
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,7 @@ class JoinViewModel(
 
     val discoveredSessions: StateFlow<List<SessionInfo>> = sessionRepository.discoveredSessions
     val activeSession: StateFlow<SessionInfo?> = sessionRepository.activeSession
+    val connectionState: StateFlow<ConnectionState> = sessionRepository.connectionState
 
     fun startDiscovery() {
         discoveryManager.startDiscovery()
@@ -29,9 +31,10 @@ class JoinViewModel(
     }
 
     fun joinSession(session: SessionInfo) {
+        // Sets CONNECTING synchronously; only a real JOIN_ACCEPT sets activeSession. Claiming the
+        // session here is what made the UI say "Connected" to a host that never replied.
         sessionManager.joinSession(session)
-        sessionRepository.setActiveSession(session)
-        
+
         val intent = Intent(context, ClientService::class.java).apply {
             action = ClientService.ACTION_START_LISTEN
         }
@@ -39,11 +42,8 @@ class JoinViewModel(
     }
 
     fun leaveSession() {
+        // Teardown clears activeSession and publishes IDLE; ClientService stops itself on that.
         sessionManager.leaveSession()
-        sessionRepository.setActiveSession(null)
-        
-        val intent = Intent(context, ClientService::class.java)
-        context.stopService(intent)
     }
 
     override fun onCleared() {

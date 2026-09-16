@@ -6,56 +6,62 @@ import android.media.AudioFormat
 import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
+import android.os.Process
 import android.util.Log
-import com.example.dayowl.model.AudioFrame
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
-import java.nio.ByteBuffer
+import com.example.dayowl.network.AudioPacketizer
+import com.example.dayowl.network.UdpEndpoint
+import java.net.InetSocketAddress
+import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * The entire host send path: capture -> packetize -> fan out, on one thread, with no queue.
+ *
+ * AudioRecord.read() is the pacer. It returns exactly once per frame of real audio, off the
+ * audio HAL clock. Nothing else may pace - the old PacedSender re-paced these frames off
+ * System.currentTimeMillis() through an unbounded Channel, so the drift between the two clocks
+ * accumulated in the queue and latency grew without bound for as long as a session ran.
+ */
 @SuppressLint("MissingPermission")
 class AudioCaptureEngine(
     private val mediaProjection: MediaProjection,
-    private val statsManager: com.example.dayowl.util.StatsManager? = null
-) : AudioFrameProducer {
+    private val endpoint: UdpEndpoint,
+    /** Called when the capture loop dies on its own (dead AudioRecord, revoked projection). */
+    private val onDied: () -> Unit = {}
+) {
+    private val clients = ConcurrentHashMap<String, InetSocketAddress>()
+
+    /** Snapshot of [clients], rebuilt only on join/leave so the send loop allocates no iterator. */
+    @Volatile private var dests: Array<InetSocketAddress> = emptyArray()
 
     private var audioRecord: AudioRecord? = null
-    private var isRunning = false
-    private var sequenceNumber = 0L
-    
-    private val _audioFrames = MutableSharedFlow<AudioFrame>(extraBufferCapacity = 64)
-    override val audioFrames: SharedFlow<AudioFrame> = _audioFrames.asSharedFlow()
-    
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
-    // Buffer pool to reduce GC pressure
-    private val bufferPool = ArrayDeque<ByteArray>()
-    private fun getBuffer(): ByteArray = synchronized(bufferPool) {
-        bufferPool.removeFirstOrNull() ?: ByteArray(AudioConfig.FRAME_SIZE_BYTES)
-    }
-    private fun releaseBuffer(buffer: ByteArray) = synchronized(bufferPool) {
-        if (bufferPool.size < 100) bufferPool.addLast(buffer)
+    private var thread: Thread? = null
+    @Volatile private var running = false
+
+    fun addClient(ip: String) {
+        // Resolved once here, never on the send path.
+        runCatching { InetSocketAddress(ip, AudioConfig.UDP_PORT_AUDIO) }
+            .onSuccess { clients[ip] = it; dests = clients.values.toTypedArray() }
     }
 
-    override fun startProducer() {
-        if (isRunning) return
-        
+    fun removeClient(ip: String) {
+        if (clients.remove(ip) != null) dests = clients.values.toTypedArray()
+    }
+
+    fun start(): Boolean {
+        if (running) return true
+
         val config = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
             .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
             .build()
 
+        // Playback capture routes through the mixer, so there is no fast capture path and
+        // setPerformanceMode would be silently ignored. minBufferSize at 48k mono is already
+        // several frames deep at 10ms - leave it alone.
         val minBufferSize = AudioRecord.getMinBufferSize(
-            AudioConfig.SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioConfig.AUDIO_FORMAT
+            AudioConfig.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioConfig.AUDIO_FORMAT
         )
-        // Log.d("AudioCaptureEngine", "minBufferSize: $minBufferSize")
 
         try {
             audioRecord = AudioRecord.Builder()
@@ -70,66 +76,83 @@ class AudioCaptureEngine(
                 .setBufferSizeInBytes(minBufferSize)
                 .build()
         } catch (e: Exception) {
-            Log.e("AudioCaptureEngine", "Failed to build AudioRecord", e)
-            return
+            Log.e(TAG, "Failed to build AudioRecord", e)
+            return false
         }
 
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e("AudioCaptureEngine", "AudioRecord not initialized")
-            return
+            Log.e(TAG, "AudioRecord not initialized")
+            release()
+            return false
         }
 
         audioRecord?.startRecording()
         if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            // Log.e("AudioCaptureEngine", "AudioRecord failed to start recording")
-            return
+            Log.e(TAG, "AudioRecord failed to start recording")
+            release()
+            return false
         }
-        
-        // Log.d("AudioCaptureEngine", "AudioRecord started successfully")
-        isRunning = true
 
-        scope.launch {
-            val recordBuffer = ByteArray(AudioConfig.FRAME_SIZE_BYTES)
-            while (isRunning) {
-                val readStartTime = android.os.SystemClock.elapsedRealtimeNanos()
-                val read = audioRecord?.read(recordBuffer, 0, recordBuffer.size) ?: 0
-                val readEndTime = android.os.SystemClock.elapsedRealtimeNanos()
-                
-                if (read > 0) {
-                    statsManager?.recordT1(readEndTime - readStartTime)
-                    val frameData = getBuffer()
-                    System.arraycopy(recordBuffer, 0, frameData, 0, read)
-                    
-                    val frame = AudioFrame(
-                        sequenceNumber = sequenceNumber++,
-                        timestamp = System.currentTimeMillis(),
-                        data = if (read == recordBuffer.size) frameData else frameData.copyOfRange(0, read),
-                        capturedAtNanos = readEndTime
-                    )
-                    _audioFrames.tryEmit(frame)
-                    statsManager?.incrementCaptured()
-                    
-                    // We don't release the buffer here because it's being used by the flow subscribers.
-                    // In a production app, we would use a more sophisticated reference counting system.
-                    // For now, we'll let GC handle it or implement a release mechanism later.
+        running = true
+        thread = Thread(::captureLoop, "dayowl-capture").apply { start() }
+        return true
+    }
+
+    private fun captureLoop() {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+
+        val packet = ByteArray(AudioPacketizer.PACKET_SIZE)
+        var seq = 0L
+        var frames = 0
+        var lastLog = System.currentTimeMillis()
+
+        while (running) {
+            val n = audioRecord?.read(packet, AudioPacketizer.HEADER_SIZE, AudioConfig.FRAME_SIZE_BYTES) ?: -1
+            if (n <= 0) {
+                if (n < 0) {
+                    // ERROR_INVALID_OPERATION / ERROR_DEAD_OBJECT. Do not spin, and do not fail
+                    // silently: the host would keep accepting joiners with no audio to give them.
+                    Log.e(TAG, "AudioRecord.read failed with " + n + ", capture is over")
+                    if (running) { running = false; onDied() }
+                    break
                 }
+                continue
+            }
+
+            AudioPacketizer.writeHeader(packet, seq++, n)
+
+            val targets = dests
+            val len = AudioPacketizer.HEADER_SIZE + n
+            for (i in targets.indices) endpoint.send(packet, len, targets[i])
+
+            frames++
+            val now = System.currentTimeMillis()
+            if (now - lastLog >= 1000) {
+                // Must read ~100 at 10ms frames. Sustained lower means the send loop is overrunning.
+                Log.i(TAG, "captureFps=$frames clients=${targets.size} seq=$seq")
+                frames = 0
+                lastLog = now
             }
         }
     }
 
-    override fun stopProducer() {
-        isRunning = false
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
-    }
-    
-    // Helper to start the capture engine - maintained for backward compatibility during refactor
-    fun start(sampleRate: Int, onAudioData: (ByteArray) -> Unit) {
-        startProducer()
+    fun stop() {
+        running = false
+        // AudioRecord.read is a native blocking call and ignores interrupt; stop() releases it.
+        audioRecord?.runCatching { stop() }
+        thread?.join(500)
+        thread = null
+        release()
+        clients.clear()
+        dests = emptyArray()
     }
 
-    fun stop() {
-        stopProducer()
+    private fun release() {
+        audioRecord?.runCatching { release() }
+        audioRecord = null
+    }
+
+    private companion object {
+        const val TAG = "AudioCaptureEngine"
     }
 }

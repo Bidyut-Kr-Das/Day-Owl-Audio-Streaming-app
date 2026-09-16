@@ -5,6 +5,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * IDLE is the teardown signal. Join timeout, host lost and user leave are three roads to the same
+ * destination, so they all land here and one observer (ClientService) acts on it.
+ */
+enum class ConnectionState { IDLE, CONNECTING, CONNECTED }
+
 class SessionRepository {
     private val _discoveredSessions = MutableStateFlow<List<SessionInfo>>(emptyList())
     val discoveredSessions: StateFlow<List<SessionInfo>> = _discoveredSessions.asStateFlow()
@@ -14,6 +20,9 @@ class SessionRepository {
 
     private val _isBroadcasting = MutableStateFlow(false)
     val isBroadcasting: StateFlow<Boolean> = _isBroadcasting.asStateFlow()
+
+    private val _connectionState = MutableStateFlow(ConnectionState.IDLE)
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     fun updateDiscoveredSessions(sessions: List<SessionInfo>) {
         _discoveredSessions.value = sessions
@@ -25,5 +34,9 @@ class SessionRepository {
 
     fun setBroadcasting(broadcasting: Boolean) {
         _isBroadcasting.value = broadcasting
+    }
+
+    fun setConnectionState(state: ConnectionState) {
+        _connectionState.value = state
     }
 }
