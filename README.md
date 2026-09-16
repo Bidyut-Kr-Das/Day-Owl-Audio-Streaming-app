@@ -1,5 +1,7 @@
 # Day Owl
 
+[![Kotlin, Android Studio, Gradle, GitHub Actions, Git](https://skillicons.dev/icons?i=kotlin,androidstudio,gradle,githubactions,git)](https://skillicons.dev)
+
 Share whatever your phone is playing with everyone in the room. One device hosts; the others join
 over the local WiFi network and hear it in near real time — no internet, no account, no pairing.
 
