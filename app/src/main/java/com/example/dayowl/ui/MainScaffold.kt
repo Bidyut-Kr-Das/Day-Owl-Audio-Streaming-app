@@ -1,12 +1,21 @@
 package com.example.dayowl.ui
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -14,6 +23,7 @@ import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.currentBackStackEntryAsState
+import com.example.dayowl.ui.theme.Spacing
 
 @Composable
 fun MainScaffold(
@@ -27,21 +37,23 @@ fun MainScaffold(
     )
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             val navBackStackEntry by navController.currentBackStackEntryAsState()
             val currentDestination = navBackStackEntry?.destination
-            
+
             // Only show bottom nav on main screens
             if (navItems.any { it.route == currentDestination?.route }) {
+                val pillShape = MaterialTheme.shapes.extraLarge
                 Surface(
                     modifier = Modifier
-                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                        .padding(horizontal = Spacing.lg, vertical = Spacing.md)
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .shadow(16.dp, RoundedCornerShape(32.dp)),
-                    shape = RoundedCornerShape(32.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    tonalElevation = 8.dp
+                        .shadow(6.dp, pillShape)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, pillShape),
+                    shape = pillShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh
                 ) {
                     NavigationBar(
                         containerColor = Color.Transparent,
@@ -59,7 +71,12 @@ fun MainScaffold(
                                         )
                                     }
                                 },
-                                label = { Text(screen.label) },
+                                label = {
+                                    Text(
+                                        text = screen.label,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                },
                                 selected = selected,
                                 onClick = {
                                     navController.navigate(screen.route) {
@@ -72,10 +89,10 @@ fun MainScaffold(
                                 },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    unselectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
-                                    selectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    unselectedTextColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f),
-                                    indicatorColor = Color.White.copy(alpha = 0.2f)
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer
                                 )
                             )
                         }

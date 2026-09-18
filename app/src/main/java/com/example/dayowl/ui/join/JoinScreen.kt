@@ -1,31 +1,41 @@
 package com.example.dayowl.ui.join
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import kotlin.math.cos
-import kotlin.math.sin
-
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import com.example.dayowl.model.SessionInfo
 import com.example.dayowl.repository.ConnectionState
+import com.example.dayowl.ui.components.DayOwlTopBar
+import com.example.dayowl.ui.components.HostAvatar
+import com.example.dayowl.ui.theme.Spacing
 import org.koin.androidx.compose.koinViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JoinScreen(
     onNavigateBack: () -> Unit,
@@ -41,151 +51,145 @@ fun JoinScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "Join Session",
-                        fontWeight = FontWeight.Bold
-                    ) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+            DayOwlTopBar(
+                title = "Join",
+                onNavigateBack = onNavigateBack
             )
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Box(
+        // The radar and the list showed the same hosts twice. The radar is the empty state; once a
+        // host answers, the list is the content.
+        if (sessions.isEmpty()) {
+            SearchingState(modifier = Modifier.fillMaxSize().padding(padding))
+        } else {
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = PaddingValues(
+                    start = Spacing.lg,
+                    end = Spacing.lg,
+                    top = Spacing.sm,
+                    bottom = Spacing.xxl
+                ),
+                verticalArrangement = Arrangement.spacedBy(Spacing.sm)
             ) {
-                RadarSearchingView()
-                
-                // Discovered Host Avatars
-                sessions.forEachIndexed { index, session ->
-                    val angle = (index * (360f / sessions.size.coerceAtLeast(1))) * (Math.PI / 180f)
-                    val radius = 100.dp
-                    
-                    Box(
-                        modifier = Modifier
-                            .offset(
-                                x = (radius.value * cos(angle)).toFloat().dp,
-                                y = (radius.value * sin(angle)).toFloat().dp
-                            )
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.secondaryContainer)
-                            .clickable { viewModel.joinSession(session) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = session.sessionName.take(1).uppercase(),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                }
-                
-                if (sessions.isEmpty()) {
+                item {
                     Text(
-                        "Searching for hosts...",
-                        modifier = Modifier.padding(top = 240.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = if (sessions.size == 1) "1 host nearby" else "${sessions.size} hosts nearby",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = Spacing.sm)
+                    )
+                }
+                items(sessions) { session ->
+                    HostRow(
+                        session = session,
+                        isJoined = activeSession?.hostName == session.hostName,
+                        isConnecting = connectionState == ConnectionState.CONNECTING,
+                        onJoin = { viewModel.joinSession(session) },
+                        onLeave = { viewModel.leaveSession() },
+                        onOpen = onNavigateToSession
                     )
                 }
             }
+        }
+    }
+}
 
-            if (sessions.isNotEmpty()) {
+@Composable
+private fun SearchingState(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(horizontal = Spacing.xl),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        RadarSearchingView()
+        Spacer(modifier = Modifier.height(Spacing.xl))
+        Text(
+            text = "Looking for hosts",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.height(Spacing.sm))
+        Text(
+            text = "Both phones need to be on the same WiFi network.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun HostRow(
+    session: SessionInfo,
+    isJoined: Boolean,
+    isConnecting: Boolean,
+    onJoin: () -> Unit,
+    onLeave: () -> Unit,
+    onOpen: () -> Unit
+) {
+    val shape = MaterialTheme.shapes.medium
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .clickable(enabled = !isJoined) { onJoin() },
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainer
+    ) {
+        Row(
+            modifier = Modifier.padding(Spacing.md),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            HostAvatar(name = session.sessionName)
+            Spacer(modifier = Modifier.width(Spacing.md))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    "Found ${sessions.size} host(s)",
-                    modifier = Modifier.padding(16.dp),
+                    text = session.sessionName,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    color = MaterialTheme.colorScheme.onSurface
                 )
-                
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1.2f)
-                ) {
-                    items(sessions) { session ->
-                        val isJoined = activeSession?.hostName == session.hostName
-                        ListItem(
-                            modifier = Modifier
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                .clickable { viewModel.joinSession(session) },
-                            headlineContent = { Text(session.sessionName, fontWeight = FontWeight.Bold) },
-                            supportingContent = { 
-                                Text(
-                                    when {
-                                        isJoined -> "Connected"
-                                        connectionState == ConnectionState.CONNECTING -> "Connecting..."
-                                        else -> "${session.ipAddress}:${session.port}"
-                                    }
-                                )
-                            },
-                            leadingContent = {
-                                Surface(
-                                    modifier = Modifier.size(40.dp),
-                                    shape = CircleShape,
-                                    color = MaterialTheme.colorScheme.primaryContainer
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Text(
-                                            text = session.sessionName.take(1).uppercase(),
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                        )
-                                    }
-                                }
-                            },
-                            trailingContent = {
-                                if (isJoined) {
-                                    Row {
-                                        TextButton(onClick = onNavigateToSession) {
-                                            Text("Open")
-                                        }
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Button(
-                                            onClick = { viewModel.leaveSession() },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = MaterialTheme.colorScheme.error
-                                            ),
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
-                                            Text("Leave")
-                                        }
-                                    }
-                                } else {
-                                    Button(
-                                        onClick = { viewModel.joinSession(session) },
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        Text("Join")
-                                    }
-                                }
-                            }
-                        )
+                Spacer(modifier = Modifier.height(Spacing.xs))
+                Text(
+                    text = when {
+                        isJoined -> "Connected"
+                        isConnecting -> "Connecting\u2026"
+                        else -> "${session.ipAddress}:${session.port}"
+                    },
+                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                    color = if (isJoined) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     }
+                )
+            }
+            Spacer(modifier = Modifier.width(Spacing.sm))
+            if (isJoined) {
+                TextButton(onClick = onOpen) {
+                    Text("Open")
+                }
+                Spacer(modifier = Modifier.width(Spacing.xs))
+                Button(
+                    onClick = onLeave,
+                    shape = MaterialTheme.shapes.small,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Text("Leave")
+                }
+            } else {
+                Button(
+                    onClick = onJoin,
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text("Join")
                 }
             }
         }

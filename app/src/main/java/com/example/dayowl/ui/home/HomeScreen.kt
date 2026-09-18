@@ -1,32 +1,39 @@
 package com.example.dayowl.ui.home
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.dayowl.ui.theme.DayOwlTheme
+import com.example.dayowl.ui.components.DayOwlTopBar
+import com.example.dayowl.ui.theme.Spacing
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
@@ -37,35 +44,26 @@ fun HomeScreen(
     val username by viewModel.username.collectAsState()
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "Day Owl", 
-                        fontWeight = FontWeight.Bold
-                    ) 
-                },
+            DayOwlTopBar(
+                title = "Day Owl",
                 actions = {
                     IconButton(onClick = onNavigateToSettings) {
                         Surface(
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.2f),
-                            modifier = Modifier.size(40.dp)
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Icon(
-                                Icons.Default.Person, 
+                                Icons.Default.Person,
                                 contentDescription = "Profile",
                                 modifier = Modifier.padding(8.dp),
-                                tint = MaterialTheme.colorScheme.onPrimary
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                }
             )
         }
     ) { padding ->
@@ -73,29 +71,26 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(24.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp)
+            contentPadding = PaddingValues(
+                start = Spacing.lg,
+                end = Spacing.lg,
+                top = Spacing.lg,
+                bottom = Spacing.xxl
+            ),
+            verticalArrangement = Arrangement.spacedBy(Spacing.xl)
         ) {
             item {
                 HeaderSection(username = username)
             }
 
             item {
-                Text(
-                    "Actions",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.md)
                 ) {
                     ActionCard(
-                        title = "Host Session",
-                        subtitle = "Start broadcasting",
+                        title = "Host",
+                        subtitle = "Share this phone's audio",
                         icon = Icons.Default.Cast,
                         backgroundColor = MaterialTheme.colorScheme.primaryContainer,
                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -103,16 +98,24 @@ fun HomeScreen(
                         onClick = onNavigateToHost
                     )
                     ActionCard(
-                        title = "Join Session",
-                        subtitle = "Connect to owl",
+                        title = "Join",
+                        subtitle = "Listen to someone nearby",
                         icon = Icons.Default.GroupAdd,
-                        // Use a slightly lighter solid Teal to differentiate without shadow artifacts
-                        backgroundColor = Color(0xFF009688), 
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        backgroundColor = MaterialTheme.colorScheme.surfaceContainer,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f),
                         onClick = onNavigateToJoin
                     )
                 }
+            }
+
+            item {
+                Text(
+                    text = "Both phones on the same WiFi. No account, no pairing, " +
+                        "nothing leaves the network.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -122,14 +125,14 @@ fun HomeScreen(
 fun HeaderSection(username: String) {
     Column {
         Text(
-            "Welcome back,",
-            style = MaterialTheme.typography.bodyLarge,
+            text = "Welcome back",
+            style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(modifier = Modifier.height(Spacing.sm))
         Text(
-            username.ifEmpty { "Ready to Connect?" },
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.ExtraBold,
+            text = username.ifEmpty { "Ready to connect" },
+            style = MaterialTheme.typography.displaySmall,
             color = MaterialTheme.colorScheme.onSurface
         )
     }
@@ -145,53 +148,39 @@ fun ActionCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
+    val shape = MaterialTheme.shapes.large
     Surface(
         modifier = modifier
-            .height(160.dp)
-            .shadow(12.dp, RoundedCornerShape(28.dp), clip = false)
+            .height(184.dp)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
             .clickable { onClick() },
-        shape = RoundedCornerShape(28.dp),
+        shape = shape,
         color = backgroundColor,
         contentColor = contentColor
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier.padding(Spacing.lg),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Surface(
-                shape = CircleShape,
-                color = Color.White.copy(alpha = 0.2f),
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    modifier = Modifier.padding(12.dp),
-                    tint = contentColor
-                )
-            }
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = contentColor
+            )
             Column {
                 Text(
-                    title,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall,
                     color = contentColor
                 )
+                Spacer(modifier = Modifier.height(Spacing.xs))
                 Text(
-                    subtitle,
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = contentColor.copy(alpha = 0.8f)
+                    color = contentColor.copy(alpha = 0.72f)
                 )
             }
         }
     }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun HomeScreenPreview() {
-    // We can't easily provide a real ViewModel in preview, but for now we can mock or just ignore
-    // For a quick fix, I'll use a placeholder or dummy call if possible, but 
-    // better to just comment out the preview or provide a dummy if we had a simple constructor.
-    // Since HomeViewModel takes DataStoreManager, it's not simple to mock here without more boilerplate.
 }

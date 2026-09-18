@@ -79,15 +79,14 @@ fun RadarSearchingView(
         Surface(
             modifier = Modifier.size(baseSize / 2.5f),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.primary,
-            tonalElevation = 8.dp
+            color = MaterialTheme.colorScheme.primaryContainer
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     imageVector = Icons.Default.Person,
                     contentDescription = null,
                     modifier = Modifier.size(baseSize / 5f),
-                    tint = MaterialTheme.colorScheme.onPrimary
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
         }

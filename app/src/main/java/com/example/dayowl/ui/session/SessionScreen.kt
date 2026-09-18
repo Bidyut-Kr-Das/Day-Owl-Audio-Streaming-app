@@ -1,77 +1,97 @@
 package com.example.dayowl.ui.session
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material3.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.dayowl.ui.components.DayOwlTopBar
+import com.example.dayowl.ui.components.StatRow
+import com.example.dayowl.ui.theme.Spacing
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionScreen(
     onNavigateBack: () -> Unit,
     onNavigateToDebug: () -> Unit
 ) {
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "Active Session",
-                        fontWeight = FontWeight.Bold
-                    ) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
+            DayOwlTopBar(
+                title = "Session",
+                onNavigateBack = onNavigateBack,
                 actions = {
                     IconButton(onClick = onNavigateToDebug) {
                         Icon(Icons.Default.BugReport, contentDescription = "Debug")
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                }
             )
         }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            verticalArrangement = Arrangement.Top,
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(padding)
+                .padding(horizontal = Spacing.lg),
+            verticalArrangement = Arrangement.Top
         ) {
-            Spacer(modifier = Modifier.height(32.dp))
-            Text("Streaming Audio...", style = MaterialTheme.typography.headlineMedium)
-            Spacer(modifier = Modifier.height(16.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(16.dp)
+            Spacer(modifier = Modifier.height(Spacing.sm))
+            Text(
+                text = "Stream",
+                style = MaterialTheme.typography.displaySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(Spacing.lg))
+
+            val shape = MaterialTheme.shapes.medium
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+                shape = shape,
+                color = MaterialTheme.colorScheme.surfaceContainer
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Bitrate: 1.5 Mbps")
-                    Text("Connected Clients: 0")
-                    Text("Packet Loss: 0%")
+                Column(modifier = Modifier.padding(horizontal = Spacing.md, vertical = Spacing.sm)) {
+                    StatRow(label = "Bitrate", value = null)
+                    StatRow(label = "Connected listeners", value = null)
+                    StatRow(label = "Packet loss", value = null)
                 }
             }
+
+            Spacer(modifier = Modifier.height(Spacing.md))
+            Text(
+                text = "These are not measured on this screen yet. Real counters exist only in " +
+                    "logcat today, so nothing is shown rather than a number the app has not read.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             Spacer(modifier = Modifier.weight(1f))
-            Button(
+            OutlinedButton(
                 onClick = onNavigateBack,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                shape = MaterialTheme.shapes.medium
             ) {
-                Text("Leave Session")
+                Text("Close", style = MaterialTheme.typography.titleMedium)
             }
+            Spacer(modifier = Modifier.height(Spacing.lg))
         }
     }
 }
