@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.dayowl.network.DiscoveryManager
 import com.example.dayowl.network.SessionManager
 import com.example.dayowl.repository.SessionRepository
 import com.example.dayowl.service.HostService
@@ -16,7 +15,6 @@ import kotlinx.coroutines.launch
 
 class HostViewModel(
     private val context: Context,
-    private val discoveryManager: DiscoveryManager,
     private val sessionManager: SessionManager,
     private val sessionRepository: SessionRepository
 ) : ViewModel() {
@@ -42,8 +40,6 @@ class HostViewModel(
             action = HostService.ACTION_STOP_BROADCAST
         }
         context.startService(intent)
-        
-        discoveryManager.stopAdvertising()
         sessionManager.stop()
     }
 

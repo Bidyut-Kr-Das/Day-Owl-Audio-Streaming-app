@@ -3,6 +3,8 @@ package com.example.dayowl
 import com.example.dayowl.audio.AudioConfig
 import com.example.dayowl.audio.FrameRing
 import com.example.dayowl.network.AudioPacketizer
+import com.example.dayowl.network.Control
+import com.example.dayowl.network.PacketType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -185,5 +187,34 @@ class AudioPipelineTest {
             }
         }
         assertEquals(0L, r.resyncCount)
+    }
+
+    // ---- control plane ----
+
+    @Test
+    fun `join request carries the audio port the joiner bound`() {
+        val encoded = Control.encode(PacketType.JOIN_REQUEST, "41234")
+        val decoded = Control.decode(encoded)
+
+        assertEquals(PacketType.JOIN_REQUEST, decoded?.type)
+        assertEquals(41234, decoded?.data?.toIntOrNull())
+    }
+
+    @Test
+    fun `host info carries the session name`() {
+        val decoded = Control.decode(Control.encode(PacketType.HOST_INFO, "Kim's Session"))
+
+        assertEquals(PacketType.HOST_INFO, decoded?.type)
+        assertEquals("Kim's Session", decoded?.data)
+    }
+
+    @Test
+    fun `discover needs no payload and an audio frame is not control`() {
+        assertNull(Control.decode(ByteArray(0)))
+        assertEquals(PacketType.DISCOVER, Control.decode(Control.encode(PacketType.DISCOVER))?.type)
+
+        val audio = ByteArray(AudioPacketizer.PACKET_SIZE)
+        AudioPacketizer.writeHeader(audio, 7L, AudioConfig.FRAME_SIZE_BYTES)
+        assertNull(Control.decode(audio))
     }
 }

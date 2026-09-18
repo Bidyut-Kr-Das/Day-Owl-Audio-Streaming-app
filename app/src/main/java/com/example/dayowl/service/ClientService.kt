@@ -11,9 +11,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.dayowl.MainActivity
 import com.example.dayowl.R
-import com.example.dayowl.audio.AudioConfig
 import com.example.dayowl.audio.AudioPlayer
-import com.example.dayowl.network.UdpEndpoint
+import com.example.dayowl.network.SessionManager
 import com.example.dayowl.repository.ConnectionState
 import com.example.dayowl.repository.SessionRepository
 import kotlinx.coroutines.CoroutineScope
@@ -27,6 +26,7 @@ class ClientService : Service() {
 
     private val audioPlayer: AudioPlayer by inject()
     private val sessionRepository: SessionRepository by inject()
+    private val sessionManager: SessionManager by inject()
 
     // A Service is not a LifecycleOwner, so it needs its own scope.
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -95,11 +95,12 @@ class ClientService : Service() {
 
         acquireWifiLock()
 
-        val endpoint = UdpEndpoint()
-        try {
-            endpoint.open(AudioConfig.UDP_PORT_AUDIO)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to bind audio socket", e)
+        // Opened by SessionManager at join time and already advertised to the host, so there is no
+        // bind to fail here and no window where the host is sending at a port nobody has yet.
+        val endpoint = sessionManager.audioEndpoint
+        if (endpoint == null || !endpoint.isOpen) {
+            Log.e(TAG, "No audio socket for this session")
+            sessionManager.stop() // publishes IDLE: never leave the UI CONNECTED over silence
             stopSelf(lastStartId)
             return
         }
@@ -107,6 +108,7 @@ class ClientService : Service() {
         // AudioPlayer owns the receive loop and the endpoint from here on.
         if (!audioPlayer.start(endpoint)) {
             endpoint.close()
+            sessionManager.stop()
             stopSelf(lastStartId)
             return
         }

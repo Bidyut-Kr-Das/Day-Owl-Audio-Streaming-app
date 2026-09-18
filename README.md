@@ -13,18 +13,19 @@ with several sets of headphones, a late-night listen that shouldn't wake the hou
 ## How it works
 
 The host captures **system audio** (via `MediaProjection` playback capture — whatever app is playing,
-not the microphone) and unicasts it as raw PCM over UDP to each joiner. Joiners find the host through
-mDNS/NSD, so nobody types an IP address.
+not the microphone) and unicasts it as raw PCM over UDP to each joiner. Joiners find the host by
+broadcasting a probe on the control port, so nobody types an IP address.
 
 ```
 HOST                                          JOINER
 AudioRecord ──┐                          ┌──> FrameRing ──> AudioTrack
   (10ms)      │                          │     (jitter)      (speaker)
-              └── UDP :5001 ─────────────┘
-                  980-byte datagrams
+              └── UDP ───────────────────┘
+                  980-byte datagrams, to the
+                  port the joiner asked for
 
               ◄── UDP :5000 (control) ──►
-                  NSD discovery, join, heartbeat
+                  broadcast discovery, join, heartbeat
 ```
 
 **48 kHz mono PCM16, 10 ms frames.** 960 bytes of audio plus a 20-byte header is a 980-byte datagram
@@ -48,7 +49,8 @@ own audio buffers. More importantly it stays flat: there is no unbounded queue a
 
 ### Connection lifecycle
 
-A joiner re-sends `JOIN_REQUEST` every 2 s and the host answers every one, so the same traffic doubles
+The joiner opens its audio socket before it joins and puts that port in the `JOIN_REQUEST`, so the
+host always sends to a port something is listening on. A joiner re-sends `JOIN_REQUEST` every 2 s and the host answers every one, so the same traffic doubles
 as a two-way heartbeat. The host evicts a client it hasn't heard from in 6 s; the joiner tears down
 if the host stops answering for 8 s. A join that never gets accepted gives up after ~5 s rather than
 hanging on "Connecting…" forever.
@@ -58,8 +60,9 @@ hanging on "Connecting…" forever.
 ## Requirements
 
 - **Android 10 (API 29) or newer**, both devices. Playback capture does not exist before that.
-- Both devices on the **same WiFi network**, with client isolation off. Most home routers are fine;
-  many public and campus networks block device-to-device traffic entirely.
+- Both devices on the **same WiFi network**, with client isolation off. A phone hotspot works, with
+  or without mobile data; most home routers are fine; many public and campus networks block
+  device-to-device traffic entirely.
 
 Apps can opt out of being captured (`ALLOW_CAPTURE_BY_NONE`). Most streaming services do, so DRM-
 protected audio will come through silent — that restriction is enforced by Android, not by this app.
@@ -92,7 +95,8 @@ APK attached — see `.github/workflows/ci.yml`.
 | `network/UdpEndpoint.kt` | One socket that both sends and receives |
 | `network/AudioPacketizer.kt` | Wire format, written in place — the hot path allocates nothing |
 | `network/SessionManager.kt` | Joiner control plane and connection state machine |
-| `network/DiscoveryManager.kt` | mDNS/NSD advertise and discover |
+| `network/DiscoveryManager.kt` | Broadcast probe, host list built from reply source addresses |
+| `network/WifiNetwork.kt` | Pins every socket to the WiFi network, not the default one |
 | `service/` | Foreground services that own the host and joiner sessions |
 | `ui/` | Compose screens, Koin view models |
 

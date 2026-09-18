@@ -17,7 +17,8 @@ object AudioConfig {
     const val BYTES_PER_SAMPLE = 2
     const val FRAME_SIZE_BYTES = (SAMPLE_RATE * CHANNELS * BYTES_PER_SAMPLE * FRAME_DURATION_MS) / 1000
 
-    const val UDP_PORT_AUDIO = 5001
+    // Only the control port is fixed. The joiner's audio port is ephemeral and travels in the
+    // JOIN_REQUEST - a hardcoded one can be already taken, and then the session is silent.
     const val UDP_PORT_CONTROL = 5000
 
     const val PACKET_TYPE_AUDIO: Byte = 0x01

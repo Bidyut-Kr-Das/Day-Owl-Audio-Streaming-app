@@ -24,18 +24,24 @@ class UdpEndpoint {
     private val recvPacket = DatagramPacket(ByteArray(0), 0)
 
     /** [port] 0 leaves the socket on an OS-assigned ephemeral port. */
-    fun open(port: Int = 0) {
+    fun open(port: Int = 0, broadcast: Boolean = false) {
         close()
         socket = DatagramSocket(null).apply {
             reuseAddress = true // survives a rapid leave/rejoin without BindException
             runCatching { sendBufferSize = AudioConfig.SOCKET_BUFFER_BYTES }
             runCatching { receiveBufferSize = AudioConfig.SOCKET_BUFFER_BYTES }
             runCatching { trafficClass = AudioConfig.DSCP_EF } // WMM AC_VO priority on WiFi
+            if (broadcast) runCatching { setBroadcast(true) }
             bind(InetSocketAddress(port))
+            // After bind, not before: an unbound socket has nothing to pin to a network.
+            WifiNetwork.bind(this)
         }
     }
 
     val isOpen: Boolean get() = socket?.isClosed == false
+
+    /** The port actually bound, or -1 when closed. Told to the host so it can aim the audio. */
+    val localPort: Int get() = socket?.localPort ?: -1
 
     /**
      * Sends [len] bytes of [buf]. Synchronized because a DatagramPacket must not be shared

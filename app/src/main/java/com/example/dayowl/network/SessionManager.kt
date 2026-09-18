@@ -7,8 +7,6 @@ import com.example.dayowl.model.SessionInfo
 import com.example.dayowl.repository.ConnectionState
 import com.example.dayowl.repository.SessionRepository
 import kotlinx.coroutines.*
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -34,6 +32,17 @@ class SessionManager(private val sessionRepository: SessionRepository) {
     @Volatile
     private var endpoint: UdpEndpoint? = null
 
+    /**
+     * Opened here rather than in ClientService so the JOIN_REQUEST can carry its real port: the
+     * host used to aim audio at a hardcoded 5001 that nothing was guaranteed to be listening on,
+     * and a failed bind there left the UI saying CONNECTED over silence.
+     */
+    @Volatile
+    private var audio: UdpEndpoint? = null
+
+    /** The socket audio arrives on. ClientService hands it to AudioPlayer, which owns it. */
+    val audioEndpoint: UdpEndpoint? get() = audio
+
     private val jobs = mutableListOf<Job>()
 
     fun joinSession(session: SessionInfo) {
@@ -48,14 +57,19 @@ class SessionManager(private val sessionRepository: SessionRepository) {
         closeGeneration(null)
 
         val ep = UdpEndpoint()
+        val audioEp = UdpEndpoint()
         try {
             ep.open()
+            audioEp.open()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open control socket", e)
+            Log.e(TAG, "Failed to open sockets", e)
+            ep.close()
+            audioEp.close()
             teardown(null)
             return
         }
         endpoint = ep
+        audio = audioEp
         sessionRepository.setConnectionState(ConnectionState.CONNECTING)
 
         val lastAccept = AtomicLong(SystemClock.elapsedRealtime())
@@ -68,33 +82,20 @@ class SessionManager(private val sessionRepository: SessionRepository) {
                     if (!ep.isOpen) break
                     continue
                 }
-                try {
-                    val data = packet.data
-                    if (data.isEmpty()) continue
-                    val json = if (data[0] == AudioConfig.PACKET_TYPE_CONTROL) {
-                        String(data, 1, data.size - 1)
-                    } else {
-                        String(data)
+                if (Control.decode(packet.data)?.type == PacketType.JOIN_ACCEPT) {
+                    lastAccept.set(SystemClock.elapsedRealtime())
+                    if (sessionRepository.connectionState.value != ConnectionState.CONNECTED) {
+                        sessionRepository.setActiveSession(session)
+                        sessionRepository.setConnectionState(ConnectionState.CONNECTED)
+                        Log.i(TAG, "Join accepted by " + packet.address)
                     }
-                    if (Json.decodeFromString<ControlPacket>(json).type == PacketType.JOIN_ACCEPT) {
-                        lastAccept.set(SystemClock.elapsedRealtime())
-                        if (sessionRepository.connectionState.value != ConnectionState.CONNECTED) {
-                            sessionRepository.setActiveSession(session)
-                            sessionRepository.setConnectionState(ConnectionState.CONNECTED)
-                            Log.i(TAG, "Join accepted by " + packet.address)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Control packet error", e)
                 }
             }
         }
 
         jobs += scope.launch {
-            val request = byteArrayOf(AudioConfig.PACKET_TYPE_CONTROL) +
-                Json.encodeToString(
-                    ControlPacket(PacketType.JOIN_REQUEST, Json.encodeToString(session))
-                ).toByteArray()
+            // The payload is the port we listen for audio on. The host used to ignore it entirely.
+            val request = Control.encode(PacketType.JOIN_REQUEST, audioEp.localPort.toString())
             var attempts = 0
 
             while (isActive) {
@@ -135,8 +136,7 @@ class SessionManager(private val sessionRepository: SessionRepository) {
         // NetworkOnMainThreadException, which UdpEndpoint.send swallows - the LEAVE would look
         // sent and silently never go out.
         scope.launch {
-            val bye = byteArrayOf(AudioConfig.PACKET_TYPE_CONTROL) +
-                Json.encodeToString(ControlPacket(PacketType.LEAVE)).toByteArray()
+            val bye = Control.encode(PacketType.LEAVE)
             ep.send(bye, bye.size, active.ipAddress, active.port)
             closeGeneration(ep)
         }
@@ -152,6 +152,9 @@ class SessionManager(private val sessionRepository: SessionRepository) {
         jobs.clear()
         endpoint?.close()
         endpoint = null
+        // AudioPlayer closes this too once it has it; close is idempotent.
+        audio?.close()
+        audio = null
         return true
     }
 
