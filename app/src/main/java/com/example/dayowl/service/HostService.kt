@@ -18,14 +18,11 @@ import com.example.dayowl.network.*
 import com.example.dayowl.repository.SessionRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import org.koin.android.ext.android.inject
 import java.util.concurrent.ConcurrentHashMap
 
 class HostService : Service() {
 
-    private val discoveryManager: DiscoveryManager by inject()
     private val sessionRepository: SessionRepository by inject()
     private val dataStoreManager: DataStoreManager by inject()
 
@@ -36,10 +33,17 @@ class HostService : Service() {
     private var captureEngine: AudioCaptureEngine? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** ip -> last time we heard from it. A client's repeated JOIN_REQUEST is its heartbeat. */
+    /** "ip:port" -> last time we heard from it. A repeated JOIN_REQUEST is the heartbeat. */
     private val lastSeen = ConcurrentHashMap<String, Long>()
 
     private var wifiLock: WifiManager.WifiLock? = null
+
+    /** Broadcast RX is filtered by the WiFi chip in power save without this. */
+    private var multicastLock: WifiManager.MulticastLock? = null
+
+    /** Answered to DISCOVER probes; set once the stored username has been read. */
+    @Volatile
+    private var sessionName = "Day Owl Session"
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_BROADCAST) {
@@ -113,7 +117,7 @@ class HostService : Service() {
 
         serviceScope.launch {
             val name = runCatching { dataStoreManager.usernameFlow.first() }.getOrDefault("Day Owl")
-            discoveryManager.startAdvertising(name + " Session", AudioConfig.UDP_PORT_CONTROL)
+            sessionName = name + " Session"
         }
     }
 
@@ -125,34 +129,33 @@ class HostService : Service() {
                     if (!control.isOpen) break
                     continue
                 }
-                try {
-                    val data = packet.data
-                    if (data.isEmpty()) continue
-
-                    val jsonStr = if (data[0] == AudioConfig.PACKET_TYPE_CONTROL) {
-                        String(data, 1, data.size - 1)
-                    } else {
-                        String(data)
+                val msg = Control.decode(packet.data) ?: continue
+                when (msg.type) {
+                    PacketType.DISCOVER -> {
+                        val info = Control.encode(PacketType.HOST_INFO, sessionName)
+                        control.send(info, info.size, packet.address, packet.port)
                     }
-
-                    when (Json.decodeFromString<ControlPacket>(jsonStr).type) {
-                        PacketType.JOIN_REQUEST -> {
-                            val fresh = lastSeen.put(packet.address, SystemClock.elapsedRealtime()) == null
-                            if (fresh) {
-                                captureEngine?.addClient(packet.address)
-                                Log.i(TAG, "Client joined: " + packet.address)
-                            }
-                            // Reply to the port the request came FROM. Replying to a fixed control
-                            // port sent the accept to a socket that nobody was ever reading.
-                            val response = byteArrayOf(AudioConfig.PACKET_TYPE_CONTROL) +
-                                Json.encodeToString(ControlPacket(PacketType.JOIN_ACCEPT)).toByteArray()
-                            control.send(response, response.size, packet.address, packet.port)
+                    PacketType.JOIN_REQUEST -> {
+                        // The audio port the joiner actually bound. A request without one is from
+                        // an older build that expected a hardcoded port we no longer send to.
+                        val audioPort = msg.data?.toIntOrNull()
+                        if (audioPort == null || audioPort !in 1..65535) {
+                            Log.w(TAG, "JOIN_REQUEST with no audio port from " + packet.address)
+                            continue
                         }
-                        PacketType.LEAVE -> dropClient(packet.address)
-                        else -> {}
+                        val key = AudioCaptureEngine.clientKey(packet.address, audioPort)
+                        val fresh = lastSeen.put(key, SystemClock.elapsedRealtime()) == null
+                        if (fresh) {
+                            captureEngine?.addClient(packet.address, audioPort)
+                            Log.i(TAG, "Client joined: " + key)
+                        }
+                        // Reply to the port the request came FROM. Replying to a fixed control
+                        // port sent the accept to a socket that nobody was ever reading.
+                        val response = Control.encode(PacketType.JOIN_ACCEPT)
+                        control.send(response, response.size, packet.address, packet.port)
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Control packet error", e)
+                    PacketType.LEAVE -> dropClientsAt(packet.address)
+                    else -> {}
                 }
             }
         }
@@ -171,12 +174,18 @@ class HostService : Service() {
         }
     }
 
-    private fun dropClient(ip: String) {
-        if (lastSeen.remove(ip) != null) {
-            captureEngine?.removeClient(ip)
-            Log.i(TAG, "Client dropped: " + ip)
+    private fun dropClient(key: String) {
+        if (lastSeen.remove(key) != null) {
+            captureEngine?.removeClient(key)
+            Log.i(TAG, "Client dropped: " + key)
         }
     }
+
+    /** LEAVE carries no port, so it drops every stream this address is receiving. */
+    private fun dropClientsAt(ip: String) {
+        lastSeen.keys.filter { it.substringBeforeLast(':') == ip }.forEach { dropClient(it) }
+    }
+
 
     private fun acquireWifiLock() {
         // Only effective while foreground with the screen on, but that is exactly the hosting case,
@@ -185,11 +194,14 @@ class HostService : Service() {
         wifiLock = runCatching {
             wm.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "dayowl:host").apply { acquire() }
         }.getOrNull()
+        // Without this some chips drop the DISCOVER broadcast before it reaches the socket.
+        multicastLock = runCatching {
+            wm.createMulticastLock("dayowl:host").apply { acquire() }
+        }.getOrNull()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        discoveryManager.stopAdvertising()
         serviceScope.cancel()
         captureEngine?.stop()
         captureEngine = null
@@ -198,6 +210,8 @@ class HostService : Service() {
         lastSeen.clear()
         wifiLock?.runCatching { if (isHeld) release() }
         wifiLock = null
+        multicastLock?.runCatching { if (isHeld) release() }
+        multicastLock = null
         sessionRepository.setBroadcasting(false)
     }
 

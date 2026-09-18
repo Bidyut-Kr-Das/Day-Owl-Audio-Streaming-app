@@ -28,6 +28,7 @@ class AudioCaptureEngine(
     /** Called when the capture loop dies on its own (dead AudioRecord, revoked projection). */
     private val onDied: () -> Unit = {}
 ) {
+    /** "ip:port" -> where to send. Keyed on both, so two joiners behind one IP stay separate. */
     private val clients = ConcurrentHashMap<String, InetSocketAddress>()
 
     /** Snapshot of [clients], rebuilt only on join/leave so the send loop allocates no iterator. */
@@ -37,14 +38,15 @@ class AudioCaptureEngine(
     private var thread: Thread? = null
     @Volatile private var running = false
 
-    fun addClient(ip: String) {
+    /** [port] is the one the joiner told us it bound, not an assumed constant. */
+    fun addClient(ip: String, port: Int) {
         // Resolved once here, never on the send path.
-        runCatching { InetSocketAddress(ip, AudioConfig.UDP_PORT_AUDIO) }
-            .onSuccess { clients[ip] = it; dests = clients.values.toTypedArray() }
+        runCatching { InetSocketAddress(ip, port) }
+            .onSuccess { clients[clientKey(ip, port)] = it; dests = clients.values.toTypedArray() }
     }
 
-    fun removeClient(ip: String) {
-        if (clients.remove(ip) != null) dests = clients.values.toTypedArray()
+    fun removeClient(key: String) {
+        if (clients.remove(key) != null) dests = clients.values.toTypedArray()
     }
 
     fun start(): Boolean {
@@ -152,7 +154,10 @@ class AudioCaptureEngine(
         audioRecord = null
     }
 
-    private companion object {
-        const val TAG = "AudioCaptureEngine"
+    companion object {
+        private const val TAG = "AudioCaptureEngine"
+
+        /** The one definition of a client's identity; HostService ages the same key out. */
+        fun clientKey(ip: String, port: Int) = ip + ":" + port
     }
 }

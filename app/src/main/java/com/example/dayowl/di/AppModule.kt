@@ -16,7 +16,7 @@ val appModule = module {
     single { DataStoreManager(get()) }
     single { SessionRepository() }
     single { SessionManager(get()) }
-    single { DiscoveryManager(get(), get()) }
+    single { DiscoveryManager(get()) }
 
     // Sockets are not injected: each is owned by the thread that reads or writes it, and the
     // services construct them directly (UdpEndpoint).

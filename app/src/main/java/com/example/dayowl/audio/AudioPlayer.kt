@@ -25,6 +25,9 @@ class AudioPlayer {
     private var playThread: Thread? = null
     @Volatile private var running = false
 
+    /** When the last audio datagram landed. Zero packets is the failure this had no words for. */
+    @Volatile private var lastRxMs = 0L
+
     /** Takes ownership of [endpoint]: [stop] closes it to unblock the receive loop. */
     fun start(endpoint: UdpEndpoint): Boolean {
         // Restart, not no-op: ClientService can be recreated before the old one is destroyed,
@@ -32,6 +35,7 @@ class AudioPlayer {
         if (running) stop()
         this.endpoint = endpoint
         ring.reset()
+        lastRxMs = System.currentTimeMillis()
         if (!buildTrack()) return false
         running = true
         rxThread = Thread(::rxLoop, "dayowl-rx").apply { start() }
@@ -89,6 +93,7 @@ class AudioPlayer {
             if (n < 0) break // socket closed
             val payload = AudioPacketizer.payloadLen(buf, n)
             if (payload <= 0) continue
+            lastRxMs = System.currentTimeMillis()
             ring.put(AudioPacketizer.seqOf(buf), buf, AudioPacketizer.HEADER_SIZE, payload)
         }
     }
@@ -96,10 +101,24 @@ class AudioPlayer {
     private fun playLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         var lastLog = System.currentTimeMillis()
+        var logNow = false
 
         while (running) {
+            // Logged before the ring is consulted, so a session receiving nothing still reports.
+            // Silence used to look exactly like health: the log below only ran once a frame played.
+            val tick = System.currentTimeMillis()
+            if (tick - lastLog >= 1000) {
+                val silentMs = tick - lastRxMs
+                if (silentMs >= NO_AUDIO_WARN_MS) {
+                    Log.w(TAG, "no audio for ${silentMs}ms - the host is not reaching this socket")
+                }
+                lastLog = tick
+                logNow = true
+            }
+
             val frame = ring.next()
             if (frame == null) {
+                logNow = false
                 // Still priming. The only sleep in this loop - once primed, the blocking write paces it.
                 try { Thread.sleep(2) } catch (_: InterruptedException) { break }
                 continue
@@ -116,14 +135,13 @@ class AudioPlayer {
                 continue
             }
 
-            val now = System.currentTimeMillis()
-            if (now - lastLog >= 1000) {
+            if (logNow) {
+                logNow = false
                 Log.i(
                     TAG,
                     "depth=${ring.depth} concealed=${ring.concealedCount} dropped=${ring.droppedCount} " +
                         "resync=${ring.resyncCount} underruns=${track.underrunCount} seq=${ring.playoutSeq}"
                 )
-                lastLog = now
             }
         }
     }
@@ -150,5 +168,6 @@ class AudioPlayer {
 
     private companion object {
         const val TAG = "AudioPlayer"
+        const val NO_AUDIO_WARN_MS = 5000L
     }
 }
