@@ -5,52 +5,86 @@ import com.example.dayowl.audio.FrameRing
 import com.example.dayowl.network.AudioPacketizer
 import com.example.dayowl.network.Control
 import com.example.dayowl.network.PacketType
+import org.concentus.OpusApplication
+import org.concentus.OpusDecoder
+import org.concentus.OpusEncoder
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.PI
+import kotlin.math.sin
 
 class AudioPipelineTest {
+
+    // ---- codec ----
+
+    @Test
+    fun `opus round trips a tone and conceals a lost frame`() {
+        val n = AudioConfig.SAMPLES_PER_FRAME
+        val enc = OpusEncoder(AudioConfig.SAMPLE_RATE, AudioConfig.CHANNELS, OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY)
+        enc.setBitrate(AudioConfig.OPUS_BITRATE)
+        val dec = OpusDecoder(AudioConfig.SAMPLE_RATE, AudioConfig.CHANNELS)
+        val pcm = ShortArray(n)
+        val out = ShortArray(n)
+        val packet = ByteArray(AudioConfig.MAX_OPUS_FRAME_BYTES)
+        var t = 0
+        var energy = 0.0
+        repeat(20) {
+            for (i in 0 until n) pcm[i] = (8000 * sin(2 * PI * 440 * t++ / AudioConfig.SAMPLE_RATE)).toInt().toShort()
+            val len = enc.encode(pcm, 0, n, packet, 0, packet.size)
+            assertTrue("frame too big: " + len, len in 1..AudioConfig.MAX_OPUS_FRAME_BYTES)
+            assertEquals(n, dec.decode(packet, 0, len, out, 0, n, false))
+            energy = out.sumOf { it.toDouble() * it }
+        }
+        assertTrue("decoded tone is silent", energy > 0.0)
+        assertEquals(n, dec.decode(null, 0, 0, out, 0, n, false)) // PLC yields a full frame
+    }
 
     // ---- wire format ----
 
     @Test
-    fun `header round trips and packet fits the MTU`() {
-        val buf = ByteArray(AudioPacketizer.PACKET_SIZE)
-        val payload = ByteArray(AudioConfig.FRAME_SIZE_BYTES) { (it % 251).toByte() }
-        System.arraycopy(payload, 0, buf, AudioPacketizer.HEADER_SIZE, payload.size)
-        AudioPacketizer.writeHeader(buf, seq = 123456789L, payloadLen = payload.size)
+    fun `packet carries current and previous frame and fits the MTU`() {
+        val cur = ByteArray(5) { 1 }
+        val prev = ByteArray(3) { 2 }
+        val buf = ByteArray(AudioPacketizer.MAX_PACKET_SIZE)
+        val len = AudioPacketizer.write(buf, 123456789L, cur, cur.size, prev, prev.size)
 
-        assertEquals(payload.size, AudioPacketizer.payloadLen(buf, buf.size))
+        assertEquals(AudioPacketizer.HEADER_SIZE + 8, len)
+        assertEquals(5, AudioPacketizer.payloadLen(buf, len))
+        assertEquals(3, AudioPacketizer.prevLen(buf))
         assertEquals(123456789L, AudioPacketizer.seqOf(buf))
-        assertArrayEquals(
-            payload,
-            buf.copyOfRange(AudioPacketizer.HEADER_SIZE, AudioPacketizer.HEADER_SIZE + payload.size)
-        )
+        val h = AudioPacketizer.HEADER_SIZE
+        assertArrayEquals(cur, buf.copyOfRange(h, h + 5))
+        assertArrayEquals(prev, buf.copyOfRange(h + 5, h + 8))
 
-        // The whole point of the 10ms frame: one datagram, no IP fragmentation.
-        assertEquals(980, AudioPacketizer.PACKET_SIZE)
+        // Two maximum frames still make one datagram, no IP fragmentation.
+        assertTrue(AudioPacketizer.MAX_PACKET_SIZE <= 1472)
     }
 
     @Test
     fun `malformed packets are rejected`() {
-        val buf = ByteArray(AudioPacketizer.PACKET_SIZE)
-        AudioPacketizer.writeHeader(buf, 1L, AudioConfig.FRAME_SIZE_BYTES)
+        val buf = ByteArray(AudioPacketizer.MAX_PACKET_SIZE)
+        val len = AudioPacketizer.write(buf, 1L, ByteArray(4), 4, ByteArray(4), 4)
 
         assertEquals(-1, AudioPacketizer.payloadLen(buf, AudioPacketizer.HEADER_SIZE - 1)) // too short
-        assertEquals(-1, AudioPacketizer.payloadLen(buf, AudioPacketizer.PACKET_SIZE - 1)) // truncated payload
+        assertEquals(-1, AudioPacketizer.payloadLen(buf, len - 1)) // truncated redundant frame
 
-        val badVersion = buf.copyOf().also { it[0] = 99 }
-        assertEquals(-1, AudioPacketizer.payloadLen(badVersion, badVersion.size))
+        val badVersion = buf.copyOf().also { it[0] = 1 } // v1 raw PCM peer
+        assertEquals(-1, AudioPacketizer.payloadLen(badVersion, len))
 
         val badType = buf.copyOf().also { it[1] = AudioConfig.PACKET_TYPE_CONTROL }
-        assertEquals(-1, AudioPacketizer.payloadLen(badType, badType.size))
+        assertEquals(-1, AudioPacketizer.payloadLen(badType, len))
     }
 
     // ---- ring storage ----
 
-    private fun ring() = FrameRing(size = 8, frameBytes = 4, target = 2, hysteresis = 1, maxPlcRepeats = 2)
+    private fun ring(decay: Int = 1000) = FrameRing(
+        size = 8, frameBytes = 4, minTarget = 1, startTarget = 2, maxTarget = 4, hysteresis = 1, decayFrames = decay
+    )
 
     private fun FrameRing.feed(seq: Long, marker: Byte) =
         put(seq, byteArrayOf(marker, marker, marker, marker), 0, 4)
@@ -69,13 +103,12 @@ class AudioPipelineTest {
     }
 
     @Test
-    fun `out of order arrival still reads back correctly`() {
+    fun `backfill fills a gap but never overwrites`() {
         val r = ring()
         r.feed(2L, 2)
-        r.feed(1L, 1)
-        r.feed(0L, 0)
-        assertArrayEquals(byteArrayOf(0, 0, 0, 0), r.get(0L))
-        assertArrayEquals(byteArrayOf(1, 1, 1, 1), r.get(1L))
+        r.backfill(1L, byteArrayOf(9, 9, 9, 9), 0, 4)
+        r.backfill(2L, byteArrayOf(9, 9, 9, 9), 0, 4)
+        assertArrayEquals(byteArrayOf(9, 9, 9, 9), r.get(1L))
         assertArrayEquals(byteArrayOf(2, 2, 2, 2), r.get(2L))
     }
 
@@ -93,6 +126,7 @@ class AudioPipelineTest {
 
         r.feed(2L, 2)
         assertArrayEquals(byteArrayOf(0, 0, 0, 0), r.next()) // starts at latest - target = 0
+        assertEquals(4, r.frameLen)
         assertEquals(1L, r.playoutSeq)
     }
 
@@ -129,34 +163,45 @@ class AudioPipelineTest {
     }
 
     @Test
-    fun `repeats the last good frame when the sender stops then falls silent`() {
-        val r = ring()
-        for (s in 0L..2L) r.feed(s, 7)
-
-        assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // seq 0, real
-        assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // seq 1, real
-        assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // seq 2, real
-        // Nothing more arrives. Play-out keeps going - the device must never be starved.
-        assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // conceal 1
-        assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // conceal 2
-        assertArrayEquals(byteArrayOf(0, 0, 0, 0), r.next()) // past maxPlcRepeats, silence
-        assertEquals(3L, r.concealedCount)
-    }
-
-    @Test
-    fun `conceals a single lost frame and resumes real audio after it`() {
+    fun `a lost frame is concealed and play-out moves past it`() {
         val r = ring()
         for (s in 0L..2L) r.feed(s, 7)
         r.next() // seq 0
         r.next() // seq 1
 
-        r.feed(4L, 9) // seq 3 is lost in transit, seq 4 arrives
+        r.feed(4L, 9) // seq 3 is lost in transit (both copies), seq 4 arrives
 
         assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // seq 2, real
-        assertArrayEquals(byteArrayOf(7, 7, 7, 7), r.next()) // seq 3, concealed by repeat
+        assertSame(FrameRing.LOST, r.next()) // seq 3, decoder conceals
         assertArrayEquals(byteArrayOf(9, 9, 9, 9), r.next()) // seq 4, real again
         assertEquals(1L, r.concealedCount)
         assertEquals(0L, r.droppedCount)
+    }
+
+    @Test
+    fun `an underrun holds position and raises the target once per run`() {
+        val r = ring()
+        for (s in 0L..2L) r.feed(s, 7)
+        repeat(3) { r.next() } // seq 0..2 played, nothing newer has arrived
+        val held = r.playoutSeq
+
+        repeat(3) { assertSame(FrameRing.LOST, r.next()) }
+        assertEquals(held, r.playoutSeq) // waits for seq 3 instead of skipping it
+        assertEquals(3, r.target) // one raise for the whole run, not three
+
+        r.feed(3L, 3)
+        assertArrayEquals(byteArrayOf(3, 3, 3, 3), r.next()) // nothing skipped
+    }
+
+    @Test
+    fun `target decays after a clean run`() {
+        val r = ring(decay = 5)
+        for (s in 0L..2L) r.feed(s, 1)
+        for (s in 3L..12L) {
+            r.next()
+            r.feed(s, 1)
+        }
+        assertEquals(1, r.target) // 2 -> 1 after 5 clean frames, floored at minTarget
     }
 
     @Test
@@ -182,7 +227,7 @@ class AudioPipelineTest {
         for (s in 0L..200L) {
             r.feed(s, (s % 127).toByte())
             if (r.next() != null) {
-                assert(r.playoutSeq > last) { "play-out went backwards at seq " + s }
+                assert(r.playoutSeq >= last) { "play-out went backwards at seq " + s }
                 last = r.playoutSeq
             }
         }
@@ -213,8 +258,8 @@ class AudioPipelineTest {
         assertNull(Control.decode(ByteArray(0)))
         assertEquals(PacketType.DISCOVER, Control.decode(Control.encode(PacketType.DISCOVER))?.type)
 
-        val audio = ByteArray(AudioPacketizer.PACKET_SIZE)
-        AudioPacketizer.writeHeader(audio, 7L, AudioConfig.FRAME_SIZE_BYTES)
-        assertNull(Control.decode(audio))
+        val audio = ByteArray(AudioPacketizer.MAX_PACKET_SIZE)
+        val len = AudioPacketizer.write(audio, 7L, ByteArray(160) { 3 }, 160, ByteArray(160), 160)
+        assertNull(Control.decode(audio, len))
     }
 }

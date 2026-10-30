@@ -13,24 +13,25 @@ with several sets of headphones, a late-night listen that shouldn't wake the hou
 ## How it works
 
 The host captures **system audio** (via `MediaProjection` playback capture — whatever app is playing,
-not the microphone) and unicasts it as raw PCM over UDP to each joiner. Joiners find the host by
-broadcasting a probe on the control port, so nobody types an IP address.
+not the microphone), encodes it with Opus and unicasts it over UDP to each joiner. Joiners find the
+host by broadcast, so nobody types an IP address.
 
 ```
 HOST                                          JOINER
-AudioRecord ──┐                          ┌──> FrameRing ──> AudioTrack
-  (10ms)      │                          │     (jitter)      (speaker)
-              └── UDP ───────────────────┘
-                  980-byte datagrams, to the
-                  port the joiner asked for
+AudioRecord ─> Opus ─┐                  ┌──> FrameRing ─> Opus ─> AudioTrack
+  (10ms)             │                  │     (jitter)            (speaker)
+                     └── UDP ───────────┘
+                  ~340-byte datagrams (frame N + frame N-1),
+                  to the port the joiner asked for
 
-              ◄── UDP :5000 (control) ──►
-                  broadcast discovery, join, heartbeat
+              ◄── UDP :5000 (control) ──►   DISCOVER probe, join, heartbeat
+              ─── UDP :5002 (announce) ──►  host HOST_INFO every 1 s
 ```
 
-**48 kHz mono PCM16, 10 ms frames.** 960 bytes of audio plus a 20-byte header is a 980-byte datagram
-— under the 1500-byte MTU, so packets never fragment. Uncompressed, so one listener costs ~768 kbps;
-five cost under 4 Mbps, which local WiFi absorbs easily. No codec means no encode/decode delay.
+**48 kHz mono Opus, 10 ms frames, 128 kbps** ([Concentus](https://github.com/plasmoapp/concentus),
+a pure-Java Opus port — no NDK). `RESTRICTED_LOWDELAY` mode adds ~5 ms of codec delay. Every packet
+carries its own frame **and the previous one**, so any single lost datagram is recovered bit-exact;
+only two consecutive losses need concealment, and that is Opus's own PLC, not a repeated frame.
 
 **Nothing paces the stream except the hardware.** On the host, `AudioRecord.read()` returns once per
 10 ms of real audio and the send happens inline on the same thread — no queue, no dispatcher hop.
@@ -40,11 +41,16 @@ which clocks the play-out loop at exactly the DAC rate. Both audio threads run a
 
 **The jitter buffer is a 64-slot ring** indexed by `sequence and 63`, with each slot's sequence
 number published through an `AtomicLongArray` — a stale slot left by a wrap simply reads as a miss.
-Play-out targets 5 frames (50 ms) of depth and reconciles the sender's clock against the speaker's
-by dropping a single frame when it runs long. A missing frame is concealed by repeating the last
-good one up to 3 times, then silence.
+Depth is adaptive: it starts at 3 frames (30 ms). An underrun holds play-out in place (Opus conceals
+one frame) so the buffer deepens, and raises the drop threshold by one frame, up to 150 ms. Ten
+clean seconds give a frame back. The sender's clock is reconciled against the speaker's by dropping
+a single frame when depth runs past that threshold.
 
-Typical end-to-end latency is roughly **60–100 ms**, dominated by the jitter buffer and the device's
+**Discovery works in both directions.** The joiner sends DISCOVER to every subnet's own broadcast
+address (not just `255.255.255.255`, which the hotspot phone routes out of cellular), and the host
+announces HOST_INFO to every subnet on port 5002. Either one getting through is enough.
+
+Typical end-to-end latency is roughly **40–80 ms** on a clean link, dominated by the jitter buffer and the device's
 own audio buffers. More importantly it stays flat: there is no unbounded queue anywhere in the path.
 
 ### Connection lifecycle
@@ -106,5 +112,5 @@ APK attached — see `.github/workflows/ci.yml`.
   living room, not for anything sensitive.
 - **Screen-off hosting degrades.** The low-latency WiFi lock is only honoured in the foreground with
   the screen on; audio keeps flowing but jitter rises.
-- **Loss concealment is frame-repeat.** Audible as a short stutter under heavy packet loss. Opus with
-  in-band FEC is the proper fix and is the intended next step if listener counts grow past ~8.
+- **Mono.** Stereo is a channel-count change; Opus makes the bandwidth cost small.
+- **Not compatible with 1.1.x.** Packet format v2 (Opus); old builds ignore the stream.

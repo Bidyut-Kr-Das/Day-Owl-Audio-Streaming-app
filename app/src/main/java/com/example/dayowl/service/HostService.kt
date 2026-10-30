@@ -19,6 +19,7 @@ import com.example.dayowl.repository.SessionRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 import org.koin.android.ext.android.inject
+import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 
 class HostService : Service() {
@@ -95,7 +96,7 @@ class HostService : Service() {
         acquireWifiLock()
 
         try {
-            control.open(AudioConfig.UDP_PORT_CONTROL)
+            control.open(AudioConfig.UDP_PORT_CONTROL, broadcast = true)
             audio.open()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open sockets", e)
@@ -114,6 +115,7 @@ class HostService : Service() {
         sessionRepository.setBroadcasting(true)
         startControlListener()
         startEvictionTicker()
+        startAnnouncer()
 
         serviceScope.launch {
             val name = runCatching { dataStoreManager.usernameFlow.first() }.getOrDefault("Day Owl")
@@ -174,6 +176,23 @@ class HostService : Service() {
         }
     }
 
+    /**
+     * HOST_INFO to every subnet this device has, unasked. The joiner's DISCOVER is not always
+     * routable to us - on the phone that runs the hotspot it can leave via cellular - so the host
+     * reaching the joiner is the second, independent way to be found.
+     */
+    private fun startAnnouncer() {
+        serviceScope.launch {
+            while (isActive) {
+                val info = Control.encode(PacketType.HOST_INFO, sessionName)
+                for (target in WifiNetwork.broadcastTargets()) {
+                    control.send(info, info.size, InetSocketAddress(target, AudioConfig.UDP_PORT_DISCOVERY))
+                }
+                delay(ANNOUNCE_INTERVAL_MS)
+            }
+        }
+    }
+
     private fun dropClient(key: String) {
         if (lastSeen.remove(key) != null) {
             captureEngine?.removeClient(key)
@@ -229,5 +248,6 @@ class HostService : Service() {
         const val ACTION_START_BROADCAST = "com.example.dayowl.START_BROADCAST"
         const val ACTION_STOP_BROADCAST = "com.example.dayowl.STOP_BROADCAST"
         const val EXTRA_RESULT_DATA = "extra_result_data"
+        private const val ANNOUNCE_INTERVAL_MS = 1000L
     }
 }

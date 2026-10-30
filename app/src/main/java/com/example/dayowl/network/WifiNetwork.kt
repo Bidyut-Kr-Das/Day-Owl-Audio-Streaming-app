@@ -6,6 +6,8 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.NetworkInterface
 
 /**
  * The WiFi network, tracked so every socket can be pinned to it.
@@ -20,9 +22,12 @@ object WifiNetwork {
     @Volatile
     private var current: Network? = null
 
+    private var cm: ConnectivityManager? = null
+
     /** Called once from [com.example.dayowl.DayOwlApplication]. */
     fun track(context: Context) {
         val cm = context.getSystemService(ConnectivityManager::class.java) ?: return
+        this.cm = cm
         // No NET_CAPABILITY_INTERNET in the request: a local-only hotspot never validates, and
         // requiring internet would make this null in exactly the case it exists for.
         val request = NetworkRequest.Builder()
@@ -42,6 +47,34 @@ object WifiNetwork {
     }
 
     fun bind(socket: DatagramSocket) {
-        runCatching { current?.bindSocket(socket) }
+        runCatching { (current ?: lookup())?.bindSocket(socket) }
+    }
+
+    /** For a socket opened before the callback has fired. */
+    @Suppress("DEPRECATION") // allNetworks: the callback is the primary path, this is the fallback
+    private fun lookup(): Network? {
+        val cm = cm ?: return null
+        return cm.allNetworks.firstOrNull {
+            cm.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+    }
+
+    /**
+     * Every directed broadcast address this device has, plus 255.255.255.255.
+     *
+     * The limited broadcast alone is not enough: on the phone running the hotspot it follows the
+     * default route - cellular, or nowhere - and never reaches the tether subnet. A subnet's own
+     * broadcast address (e.g. 192.168.43.255) is routed out of the interface that owns it.
+     */
+    fun broadcastTargets(): List<InetAddress> {
+        val out = LinkedHashSet<InetAddress>()
+        runCatching {
+            for (nif in NetworkInterface.getNetworkInterfaces()) {
+                if (!nif.isUp || nif.isLoopback) continue
+                for (a in nif.interfaceAddresses) a.broadcast?.let { out.add(it) }
+            }
+        }
+        out.add(InetAddress.getByName("255.255.255.255"))
+        return out.toList()
     }
 }

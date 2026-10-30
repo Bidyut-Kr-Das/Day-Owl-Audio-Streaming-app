@@ -7,9 +7,12 @@ import android.os.Process
 import android.util.Log
 import com.example.dayowl.network.AudioPacketizer
 import com.example.dayowl.network.UdpEndpoint
+import org.concentus.OpusDecoder
+import org.concentus.OpusException
 
 /**
- * The entire client receive path: two dedicated threads either side of a [FrameRing].
+ * The entire client receive path: two dedicated threads either side of a [FrameRing] of Opus
+ * frames. Decoding happens on the play thread, so the decoder needs no locking.
  *
  * AudioTrack.write(WRITE_BLOCKING) is the clock. It blocks until the data is queued, which paces
  * the play-out loop at exactly the DAC rate for free. The old PlaybackScheduler computed its own
@@ -87,19 +90,30 @@ class AudioPlayer {
     private fun rxLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         val ep = endpoint ?: return
-        val buf = ByteArray(AudioPacketizer.PACKET_SIZE)
+        val buf = ByteArray(AudioPacketizer.MAX_PACKET_SIZE)
         while (running) {
             val n = ep.receiveInto(buf)
             if (n < 0) break // socket closed
-            val payload = AudioPacketizer.payloadLen(buf, n)
-            if (payload <= 0) continue
+            val cur = AudioPacketizer.payloadLen(buf, n)
+            if (cur <= 0) continue
             lastRxMs = System.currentTimeMillis()
-            ring.put(AudioPacketizer.seqOf(buf), buf, AudioPacketizer.HEADER_SIZE, payload)
+            val seq = AudioPacketizer.seqOf(buf)
+            // The redundant copy first, so put() below leaves `latest` on this packet's own frame.
+            val prev = AudioPacketizer.prevLen(buf)
+            if (prev > 0) ring.backfill(seq - 1, buf, AudioPacketizer.HEADER_SIZE + cur, prev)
+            ring.put(seq, buf, AudioPacketizer.HEADER_SIZE, cur)
         }
     }
 
     private fun playLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        val decoder = try {
+            OpusDecoder(AudioConfig.SAMPLE_RATE, AudioConfig.CHANNELS)
+        } catch (e: OpusException) {
+            Log.e(TAG, "Failed to create Opus decoder", e)
+            return
+        }
+        val pcm = ShortArray(AudioConfig.SAMPLES_PER_FRAME)
         var lastLog = System.currentTimeMillis()
         var logNow = false
 
@@ -124,8 +138,22 @@ class AudioPlayer {
                 continue
             }
 
+            // A null packet asks Opus for its own loss concealment, which fades smoothly instead of
+            // the buzz the old repeat-last-frame produced.
+            val samples = try {
+                if (frame === FrameRing.LOST) {
+                    decoder.decode(null, 0, 0, pcm, 0, AudioConfig.SAMPLES_PER_FRAME, false)
+                } else {
+                    decoder.decode(frame, 0, ring.frameLen, pcm, 0, AudioConfig.SAMPLES_PER_FRAME, false)
+                }
+            } catch (e: OpusException) {
+                Log.w(TAG, "Opus decode failed", e)
+                pcm.fill(0)
+                AudioConfig.SAMPLES_PER_FRAME
+            }
+
             val track = audioTrack ?: break
-            val n = track.write(frame, 0, frame.size, AudioTrack.WRITE_BLOCKING)
+            val n = track.write(pcm, 0, samples, AudioTrack.WRITE_BLOCKING)
             if (n <= 0) {
                 // ERROR_DEAD_OBJECT / ERROR_INVALID_OPERATION. Without this branch the loop,
                 // having no sleep, would spin at 100% CPU forever.
@@ -139,8 +167,9 @@ class AudioPlayer {
                 logNow = false
                 Log.i(
                     TAG,
-                    "depth=${ring.depth} concealed=${ring.concealedCount} dropped=${ring.droppedCount} " +
-                        "resync=${ring.resyncCount} underruns=${track.underrunCount} seq=${ring.playoutSeq}"
+                    "depth=${ring.depth} target=${ring.target} concealed=${ring.concealedCount} " +
+                        "dropped=${ring.droppedCount} resync=${ring.resyncCount} " +
+                        "underruns=${track.underrunCount} seq=${ring.playoutSeq}"
                 )
             }
         }

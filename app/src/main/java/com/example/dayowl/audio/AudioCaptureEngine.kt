@@ -10,11 +10,14 @@ import android.os.Process
 import android.util.Log
 import com.example.dayowl.network.AudioPacketizer
 import com.example.dayowl.network.UdpEndpoint
+import org.concentus.OpusApplication
+import org.concentus.OpusEncoder
+import org.concentus.OpusException
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * The entire host send path: capture -> packetize -> fan out, on one thread, with no queue.
+ * The entire host send path: capture -> Opus encode -> packetize -> fan out, on one thread, no queue.
  *
  * AudioRecord.read() is the pacer. It returns exactly once per frame of real audio, off the
  * audio HAL clock. Nothing else may pace - the old PacedSender re-paced these frames off
@@ -35,6 +38,7 @@ class AudioCaptureEngine(
     @Volatile private var dests: Array<InetSocketAddress> = emptyArray()
 
     private var audioRecord: AudioRecord? = null
+    private var encoder: OpusEncoder? = null
     private var thread: Thread? = null
     @Volatile private var running = false
 
@@ -95,6 +99,17 @@ class AudioCaptureEngine(
             return false
         }
 
+        encoder = try {
+            OpusEncoder(AudioConfig.SAMPLE_RATE, AudioConfig.CHANNELS, OpusApplication.OPUS_APPLICATION_RESTRICTED_LOWDELAY).apply {
+                setBitrate(AudioConfig.OPUS_BITRATE)
+                setComplexity(AudioConfig.OPUS_COMPLEXITY)
+            }
+        } catch (e: OpusException) {
+            Log.e(TAG, "Failed to create Opus encoder", e)
+            release()
+            return false
+        }
+
         running = true
         thread = Thread(::captureLoop, "dayowl-capture").apply { start() }
         return true
@@ -103,39 +118,62 @@ class AudioCaptureEngine(
     private fun captureLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
 
-        val packet = ByteArray(AudioPacketizer.PACKET_SIZE)
+        val enc = encoder ?: return
+        val pcm = ShortArray(AudioConfig.SAMPLES_PER_FRAME)
+        val packet = ByteArray(AudioPacketizer.MAX_PACKET_SIZE)
+        var cur = ByteArray(AudioConfig.MAX_OPUS_FRAME_BYTES)
+        var prev = ByteArray(AudioConfig.MAX_OPUS_FRAME_BYTES)
+        var prevLen = 0
         var seq = 0L
         var frames = 0
         var lastLog = System.currentTimeMillis()
 
         while (running) {
-            val n = audioRecord?.read(packet, AudioPacketizer.HEADER_SIZE, AudioConfig.FRAME_SIZE_BYTES) ?: -1
-            if (n <= 0) {
-                if (n < 0) {
-                    // ERROR_INVALID_OPERATION / ERROR_DEAD_OBJECT. Do not spin, and do not fail
-                    // silently: the host would keep accepting joiners with no audio to give them.
-                    Log.e(TAG, "AudioRecord.read failed with " + n + ", capture is over")
-                    if (running) { running = false; onDied() }
-                    break
-                }
+            if (!readFrame(pcm)) break
+
+            // Opus needs exactly one whole frame; a short read is completed by readFrame.
+            val curLen = try {
+                enc.encode(pcm, 0, AudioConfig.SAMPLES_PER_FRAME, cur, 0, cur.size)
+            } catch (e: OpusException) {
+                Log.w(TAG, "Opus encode failed", e)
                 continue
             }
 
-            AudioPacketizer.writeHeader(packet, seq++, n)
-
+            val len = AudioPacketizer.write(packet, seq++, cur, curLen, prev, prevLen)
             val targets = dests
-            val len = AudioPacketizer.HEADER_SIZE + n
             for (i in targets.indices) endpoint.send(packet, len, targets[i])
+
+            // This frame rides again in the next packet as the redundant copy.
+            val t = prev; prev = cur; cur = t
+            prevLen = curLen
 
             frames++
             val now = System.currentTimeMillis()
             if (now - lastLog >= 1000) {
                 // Must read ~100 at 10ms frames. Sustained lower means the send loop is overrunning.
-                Log.i(TAG, "captureFps=$frames clients=${targets.size} seq=$seq")
+                Log.i(TAG, "captureFps=$frames clients=${targets.size} seq=$seq bytes=$len")
                 frames = 0
                 lastLog = now
             }
         }
+    }
+
+    /** Fills [pcm] with one whole frame. False once capture is over. */
+    private fun readFrame(pcm: ShortArray): Boolean {
+        var got = 0
+        while (got < pcm.size) {
+            val n = audioRecord?.read(pcm, got, pcm.size - got) ?: -1
+            if (n < 0) {
+                // ERROR_INVALID_OPERATION / ERROR_DEAD_OBJECT. Do not spin, and do not fail
+                // silently: the host would keep accepting joiners with no audio to give them.
+                Log.e(TAG, "AudioRecord.read failed with " + n + ", capture is over")
+                if (running) { running = false; onDied() }
+                return false
+            }
+            if (!running) return false
+            got += n
+        }
+        return true
     }
 
     fun stop() {
@@ -152,6 +190,7 @@ class AudioCaptureEngine(
     private fun release() {
         audioRecord?.runCatching { release() }
         audioRecord = null
+        encoder = null
     }
 
     companion object {
