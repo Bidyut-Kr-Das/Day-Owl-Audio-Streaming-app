@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   build:
+    # Only the owner's pushes, tags and PRs run CI; anyone else's PR or fork is skipped.
+    if: github.actor == 'Bidyut-Kr-Das'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
