@@ -17,3 +17,7 @@ local.properties
 # Build artifacts - never commit, app/release/app-release.apk was 48.8MB
 /app/release/
 /.artifacts/
+
+# Release signing key - keep it out of git, back it up somewhere safe
+*.jks
+*.keystore

@@ -31,13 +31,25 @@ jobs:
       - name: Test and build
         run: ./gradlew testDebugUnitTest assembleDebug
 
-      - name: Name the APK after the tag
+      # Only tags build the signed release. The keystore lives in repo secrets, base64-encoded,
+      # and is written to the runner's temp dir - never into the workspace.
+      - name: Build signed release APK
         if: startsWith(github.ref, 'refs/tags/v')
-        run: mv app/build/outputs/apk/debug/app-debug.apk "DayOwl-${GITHUB_REF_NAME}-debug.apk"
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          DAYOWL_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          DAYOWL_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          DAYOWL_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_BASE64" || { echo "KEYSTORE_BASE64 secret is not set"; exit 1; }
+          export DAYOWL_KEYSTORE="$RUNNER_TEMP/release.jks"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$DAYOWL_KEYSTORE"
+          ./gradlew assembleRelease
+          mv app/build/outputs/apk/release/app-release.apk "DayOwl-${GITHUB_REF_NAME}.apk"
 
       # gh is preinstalled on the runner - no third-party release action needed.
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "DayOwl-${GITHUB_REF_NAME}-debug.apk" --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" "DayOwl-${GITHUB_REF_NAME}.apk" --generate-notes

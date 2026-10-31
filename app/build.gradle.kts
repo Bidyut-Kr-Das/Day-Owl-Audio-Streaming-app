@@ -20,8 +20,21 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release signing comes from the environment so the keystore and its passwords never touch git.
+    // Without DAYOWL_KEYSTORE (a plain local build) the release APK is simply left unsigned.
+    val keystore = System.getenv("DAYOWL_KEYSTORE")
+    signingConfigs {
+        if (keystore != null) create("release") {
+            storeFile = file(keystore)
+            storePassword = System.getenv("DAYOWL_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("DAYOWL_KEY_ALIAS")
+            keyPassword = System.getenv("DAYOWL_KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
         release {
+            if (keystore != null) signingConfig = signingConfigs.getByName("release")
             optimization {
                 enable = false
             }
